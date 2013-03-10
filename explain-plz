@@ -161,6 +161,7 @@ def explain(path):
 		print('%sSubfolders with explanation:' % INDENT)
 		for l in output:
 			print('%s%s%s' % (INDENT,INDENT,l))
+		print('')
 
 
 def update():
