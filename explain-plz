@@ -143,6 +143,25 @@ def explain(path):
 		print('%sGit fetch URL: %s' % (INDENT,gitinfo[1]))
 		print('')
 
+	# TODO: should be optimized, not to iterate over the whole index again:
+	index = getindex()
+
+	output = []
+	for l in index:
+		if l.startswith(lastmatch[0]):
+			relpath = os.path.relpath(l.split('|')[0], lastmatch[0])
+			if relpath != '.':
+				if len(output) >= 10:
+					output.append('and more ...')
+					break
+				else:
+					output.append('%s' % relpath)
+
+	if len(output) > 0:
+		print('%sSubfolders with explanation:' % INDENT)
+		for l in output:
+			print('%s%s%s' % (INDENT,INDENT,l))
+
 
 def update():
 	'''
