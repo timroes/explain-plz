@@ -1,0 +1,247 @@
+#! /usr/bin/env python
+
+import os, sys, urllib2, shutil, re
+import subprocess
+from StringIO import StringIO
+from zipfile import ZipFile
+
+CONFIG_DIR = os.path.expanduser('~/.explain-plz')
+INDEX_FILE = 'index.idx'
+PROGRAM_NAME = os.path.basename(sys.argv[0])
+UPDATE_FILE = 'https://github.com/timroes/explain-plz-data/archive/master.zip'
+INDENT = '   '
+
+def find_root(folder):
+	'''
+		Finds the root of the android source code, by searching each parent directory
+		until a .repo folder has been found.
+	'''
+	folder = os.path.abspath(folder)
+	if os.path.isdir(os.path.join(folder, '.repo')):
+		return folder
+	else:
+		parent = os.path.dirname(folder)
+		if parent == folder:
+			raise Exception('Directory doesn\'t seem to belong to android source code. No parent directory contained a .repo folder.')
+		return find_root(os.path.dirname(folder))
+
+def getindex():
+	'''
+		Opens the index file.
+	'''
+	return open(os.path.join(CONFIG_DIR, INDEX_FILE))
+
+def getgitinfo(path):
+	'''
+		Returns information about git for a given path.
+		The returned list will contain the following elements:
+
+		If the git information couldn't be found (e.g. because its not a git project)
+		None will be returned.
+	'''
+
+	oldpwd = os.getcwd()
+	try:
+		os.chdir(path)
+		FNULL = open(os.devnull, 'w')
+		toplevel = subprocess.check_output(['git','rev-parse','--show-toplevel'], stderr=FNULL).strip()
+		fetchurl = subprocess.check_output(['git','remote','show','-n','aosp'], stderr=FNULL).split('\n')[1]
+		fetchurl = fetchurl.replace('Fetch URL:','').strip()
+		return [toplevel, fetchurl]
+	except subprocess.CalledProcessError:
+		return None
+	finally:
+		os.chdir(oldpwd)
+	
+def getexpfile(name):
+	exp_file = os.path.join(CONFIG_DIR,name)
+
+	if not os.path.isfile(exp_file):
+		raise Exception('Could not find explanation file %s.' % exp_file)
+
+	return open(exp_file, 'r')
+	
+def explanation(indexentry):
+	'''
+		Print outs an explanation for an indexentry.
+		The indexentry must contain 2 elements and a can contain a 3rd optional one.
+		indexentry[0] = The path that will be explained (relatively to the android source root)
+		indexentry[1] = The name of the txt file, that will be used for explanation.
+		optional: indexentry[2] = A search term that was searched for and should be highlighted.
+	'''
+	exp = getexpfile(indexentry[1].strip())
+
+	if len(indexentry) > 2 and indexentry[2]:
+		replace = re.compile('(' + re.escape(indexentry[2]) + ')', re.IGNORECASE)
+	else:
+		replace = None
+
+	print('\nExplanation for folder \033[01m%s\033[0m:' % indexentry[0])
+	for l in exp:
+		if replace:
+			l = replace.sub('\033[01;92m\g<1>\033[0m', l)
+		print('%s%s' % (INDENT,l.strip()))
+	
+	print('')
+
+def search(qry):
+	'''
+		Searches in all descriptions for the given qry.
+	'''
+	
+	results = []
+
+	index = getindex()
+
+	for i in index:
+		idx = i.split('|')
+		exp = getexpfile(idx[1].strip()).read()
+		if qry.lower() in exp.lower():
+			explanation([ idx[0], idx[1].strip(), qry ])
+
+
+def explain(path):
+	'''
+		This method explains the given directory.
+		It looks up the index file to find the best matching explanation (nearest parent
+		directory) and print out its content.
+	'''
+
+	if not os.path.exists(path):
+		raise Exception('Given parameter "%s" wasn\'t an existing path.' % sys.argv[1])
+
+	android_root = find_root(path)
+	cur_dir = os.path.relpath(path, android_root)
+
+	if not os.path.exists(os.path.join(CONFIG_DIR, INDEX_FILE)):
+		raise Exception('Index file wasn\'t found. Please do an update: %s --update' % PROGRAM_NAME)
+	
+	index = getindex()
+
+	lastmatch = None
+
+	for l in index:
+		idx = l.split('|')
+		# Index file must be sorted alphabetically, to be able to abort 
+		# search once we found alphabetically 'higher' entries
+		if idx[0] > cur_dir:
+			break
+		if cur_dir.startswith(idx[0]):
+			lastmatch = idx
+
+	index.close()
+
+	if lastmatch == None:
+		print("Could not find explanation for folder '%s'." % cur_dir)
+		return
+	
+	explanation(lastmatch)
+
+	gitinfo = getgitinfo(path)
+	if gitinfo:
+		print('%sGit project directory: %s' % (INDENT,os.path.relpath(gitinfo[0], android_root)))
+		print('%sGit fetch URL: %s' % (INDENT,gitinfo[1]))
+		print('')
+
+
+def update():
+	'''
+		Update the explanation database. This will download the zip file from UPDATE_FILE
+		and unzip all .txt and .idx files to CONFIG_DIR. The user will be asked for confirmation
+		before deleting all her configs.
+	'''
+
+	print("This will delete your whole explanation database (and all changes you made to it).")
+	print("Are you sure you want to do this? [Y/n]")
+	choice = raw_input().lower().strip()
+	if choice not in ['y', 'yes', '']:
+		sys.exit(0)
+
+	if not os.path.exists(CONFIG_DIR):
+		os.mkdir(CONFIG_DIR)
+
+	print("Cleaning up current database...")
+	for f in os.listdir(CONFIG_DIR):
+		os.unlink(os.path.join(CONFIG_DIR, f))
+	print("Downloading new data from %s..." % UPDATE_FILE)
+	url = urllib2.urlopen(UPDATE_FILE)
+	zipfile = ZipFile(StringIO(url.read()))
+	print("Extracting new files...")
+	for f in zipfile.namelist():
+		filename = os.path.basename(f)
+
+		if not filename:
+			continue
+
+		if not f.endswith('.txt') and not f.endswith('.idx'):
+			continue
+
+		source = zipfile.open(f)
+		target = file(os.path.join(CONFIG_DIR, filename), 'wb')
+		shutil.copyfileobj(source, target)
+		source.close()
+		target.close()
+
+	zipfile.close()
+				
+	print("Finished updating, %d explanation files." % (len(os.listdir(CONFIG_DIR)) - 1))
+
+def listall():
+	'''
+		Lists all known directories for explanation.
+	'''
+	index = getindex()
+
+	for l in index:
+		exp = l.split('|')
+		print(exp[0])
+
+
+def usage():
+	'''
+		Prints out usage message.
+	'''
+
+	print('''
+Usage: %s [ <path> | --search <term> | --update | --list | --help ]
+Actions:
+	No parameters:
+		Show explanation for the current folder.
+	<path>:
+		Show explanation for the specified folder.
+	--search <term> or -s <term>:
+		Search all explanations (case-insensitive) for a given string 
+		and show all matching explanations.
+	--update or -u:
+		Update explanation database from internet.
+		The database will be stored in %s.
+	--list or -l:
+		List all folders that we have an explanation for.
+	--help or -h:
+		Show this help message.
+	''' % (os.path.basename(sys.argv[0]),CONFIG_DIR))
+
+if __name__ == "__main__":
+	try:
+		if len(sys.argv) > 1:
+			action = sys.argv[1]
+			if action in ['--update','-u']:
+				update()
+			elif action in ['--search','-s']:
+				if len(sys.argv) < 3:
+					raise Exception('No search term found.')
+				search(sys.argv[2])
+			elif action in ['--help','-h']:
+				usage()
+			elif action in ['--list','-l']:
+				listall()
+			elif action[0] == '-':
+				print('The parameter %s is unknown.' % action)
+			else:
+				explain(action)
+		else:
+			explain(os.getcwd())
+	except Exception as ex:
+		print(ex)
+		sys.exit(1)
+
