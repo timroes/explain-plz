@@ -34,7 +34,7 @@ Instead of just explaining a folder you have the following parameters:
 
 **--update or -u** Updates the local database from the above mentioned project.
 
-**--search <term> or -s <term>** Searches all explanation files for *<term>*.
+**--search {term} or -s {term}** Searches all explanation files for *{term}*.
 
 **--list or -l** Prints out a list of all folder, that can be explained by the tool.
 
